@@ -31,6 +31,9 @@ import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 /**
+ *
+ * 优化点： 1、  get(int index) 方法没有对 index 参数进行越界检查，HiKariCP保证不会越界
+ *         2、  将remove(Object element)的顺序遍历查找优化为逆序查找
  * Fast list without range checking.
  *
  * @author Brett Wooldridge
@@ -228,7 +231,7 @@ public final class FastList<T> implements List<T>, RandomAccess, Serializable
                return elementData[index++];
             }
 
-            throw new NoSuchElementException("No more elements in FastList"); 
+            throw new NoSuchElementException("No more elements in FastList");
          }
       };
    }

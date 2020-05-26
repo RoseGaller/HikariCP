@@ -66,14 +66,19 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
 {
    private static final Logger LOGGER = LoggerFactory.getLogger(ConcurrentBag.class);
 
+   //存储所有的数据库连接
    private final CopyOnWriteArrayList<T> sharedList;
    private final boolean weakThreadLocals;
 
+   //存储线程独有的数据库连接
    private final ThreadLocal<List<Object>> threadList;
    private final IBagStateListener listener;
+
+   //等待数据库连接的线程数
    private final AtomicInteger waiters;
    private volatile boolean closed;
 
+   //分配数据库连接
    private final SynchronousQueue<T> handoffQueue;
 
    public interface IConcurrentBagEntry
@@ -126,20 +131,25 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
    public T borrow(long timeout, final TimeUnit timeUnit) throws InterruptedException
    {
       // Try the thread-local list first
+      // 首先查看threadLocal是否有空闲连接
       final List<Object> list = threadList.get();
       for (int i = list.size() - 1; i >= 0; i--) {
          final Object entry = list.remove(i);
          @SuppressWarnings("unchecked")
          final T bagEntry = weakThreadLocals ? ((WeakReference<T>) entry).get() : (T) entry;
+         //本地线程的连接可能会被其他线程从共享队列获取到该线程的连接，需要CAS防止重复分配
          if (bagEntry != null && bagEntry.compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
             return bagEntry;
          }
       }
 
-      // Otherwise, scan the shared list ... then poll the handoff queue
+      //从共享队列获取空闲连接
+      // Otherwise, scan the shared list ... then poll the  queue
       final int waiting = waiters.incrementAndGet();
       try {
+         //本地线程无空闲连接，从共享连接队列获取
          for (T bagEntry : sharedList) {
+            //如果共享队列有可用连接，直接返回
             if (bagEntry.compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
                // If we may have stolen another waiter's connection, request another bag add.
                if (waiting > 1) {
@@ -151,9 +161,11 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
 
          listener.addBagItem(waiting);
 
+         //共享队列没有连接，则等待
          timeout = timeUnit.toNanos(timeout);
          do {
             final long start = currentTime();
+            //从SynchronousQueue获取连接
             final T bagEntry = handoffQueue.poll(timeout, NANOSECONDS);
             if (bagEntry == null || bagEntry.compareAndSet(STATE_NOT_IN_USE, STATE_IN_USE)) {
                return bagEntry;
@@ -178,7 +190,7 @@ public class ConcurrentBag<T extends IConcurrentBagEntry> implements AutoCloseab
     * @throws NullPointerException if value is null
     * @throws IllegalStateException if the bagEntry was not borrowed from the bag
     */
-   public void requite(final T bagEntry)
+   public void   requite(final T bagEntry)
    {
       bagEntry.setState(STATE_NOT_IN_USE);
 
